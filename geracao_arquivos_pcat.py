@@ -585,7 +585,7 @@ grupo_mes = est_ini.groupby(['ano_mes', 'COD_ITEM']).agg({
 }).reset_index()
 
 # Para cada mês, gerar um arquivo .txt
-reg_1050_ant = pd.DataFrame(columns=['ref', 'itemcode', 'iq', 'iv', 'fq', 'fv'])
+reg_1050_ant = pd.DataFrame(columns=['itemcode', 'iq', 'iv', 'fq', 'fv'])
 for periodo, grupo in grupo_mes.groupby('ano_mes'):
     nome_arquivo = f"{nome_pasta}/RessarcimentoST-{CNPJ_ENTIDADE}_{periodo.strftime('%Y-%m')}.txt"
     #nome_arquivo = f"C:/temp_calculo/RessarcimentoST-{CNPJ_ENTIDADE}_{periodo.strftime('%Y-%m')}.txt"
@@ -602,14 +602,15 @@ for periodo, grupo in grupo_mes.groupby('ano_mes'):
     reg0150 = gera_0150(nfe_auxs, est_ini_mes)
     reg0200 = gera_0200(est_ini_mes)
     reg1050 = gera_1050(est_ini_mes, reg_1050_ant)
-    try:
-        reg_1050_ant = pd.merge(reg1050, reg_1050_ant, on='itemcode', how='outer', indicator='total')
-    except:
-        print("DEBUG!")
-    reg_1050_ant.loc[reg_1050_ant['total'] == 'right_only', ['iq_x', 'fq_x', 'iv_x', 'fv_x']] = \
-        reg_1050_ant.loc[reg_1050_ant['total'] == 'right_only', ['iq_y', 'fq_y', 'iv_y', 'fv_y']].values
-    reg_1050_ant = reg_1050_ant.drop(columns=['iq_y', 'fq_y', 'iv_y', 'fv_y', 'total'])
-    reg_1050_ant = reg_1050_ant.rename(columns={'iq_x': 'iq', 'fq_x':'fq' , 'iv_x': 'iv', 'fv_x': 'fv'})
+    if reg_1050_ant.empty:
+        reg_1050_ant = reg1050[['itemcode', 'iq', 'iv', 'fq', 'fv']].copy()
+    else:
+        reg_1050_ant = pd.merge(reg1050[['itemcode', 'iq', 'iv', 'fq', 'fv']], reg_1050_ant, on='itemcode',\
+                                how='outer', indicator='total')
+        reg_1050_ant.loc[reg_1050_ant['total'] == 'right_only', ['iq_x', 'fq_x', 'iv_x', 'fv_x']] = \
+            reg_1050_ant.loc[reg_1050_ant['total'] == 'right_only', ['iq_y', 'fq_y', 'iv_y', 'fv_y']].values
+        reg_1050_ant = reg_1050_ant.drop(columns=['iq_y', 'fq_y', 'iv_y', 'fv_y', 'total'])
+        reg_1050_ant = reg_1050_ant.rename(columns={'iq_x': 'iq', 'fq_x':'fq' , 'iv_x': 'iv', 'fv_x': 'fv'})
 
 
     # raise SystemExit("Parando aqui para DEBUG!")
