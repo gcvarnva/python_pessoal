@@ -3,6 +3,7 @@ import sys
 pasta_bibliotecas = r"Z:\Dados\Projetos_python\bibliotecas"
 sys.path.append(str(pasta_bibliotecas))
 import util_ressarcimento
+nome_pasta = ""
 
 # Dicionário: {'código IBGE': 'tamanho da IE'}
 ie_tamanhos_por_municipio = {
@@ -36,7 +37,12 @@ ie_tamanhos_por_municipio = {
 }
 
 MODIFICA = False
-TEM_0220 = False
+TEM_0220 = True
+UNIFORMIZA_FATORES = False
+DIVIDIR = False
+CARREGA_BLOCOH = True
+ICMS_TOT_PELAS_SAIDAS = True
+NOME_BLOCOH = "CNPJ  Estoque 31_10_2019_EMP0009-71.TXT"
 fator_icms_tot = 1.0
 #fator_conversao = 3.5
 # fator_conversao = 2.5
@@ -183,6 +189,31 @@ def gera_1050(est_ini_mes, reg_1050_ant):
     mydata1050['fv'] = 0
 
     ficha3 = util_ressarcimento.gerar_ficha3(mydata1050, mydata1100, mydata1200)
+    # ##################################################################################################
+    # ################################### Gerando excel da ficha3 ######################################
+    # ##################################################################################################
+    print("Gerando excel da ficha3...", end="", flush=True)
+    ficha3_excel = ficha3.copy()
+    nome_ficha3_completa = r"\ficha3_completa_" + ficha3_excel['ref'].iloc[0] + ".xlsx"
+    ficha3_excel.to_excel(nome_pasta + nome_ficha3_completa, index=False)
+    ficha3_excel['VLR_APURACAO'] = ficha3_excel['VLR_RESSARCIMENTO'] - ficha3_excel['VLR_COMPLEMENTO']
+
+    ficha3_resumo = ficha3_excel.groupby(['ref', 'item.code']).agg( \
+        {'QTD_SALDO': 'first', 'ICMS_TOT_SALDO': 'first', 'VLR_RESSARCIMENTO': 'sum', \
+         'VLR_COMPLEMENTO': 'sum', 'VLR_APURACAO': 'sum'}).reset_index()
+
+    pivot_table_excel = ficha3_excel.\
+        pivot_table(values=['VLR_RESSARCIMENTO', 'VLR_COMPLEMENTO', 'VLR_APURACAO'],\
+                    index='ref',\
+                    aggfunc='sum',\
+                    margins=True,\
+                    margins_name='Total')
+    nome_ficha3_excel = r"\ficha3_" + ficha3_excel['ref'].iloc[0] + ".xlsx"
+    nome_ficha3_resumo = r"\ficha3_resumo_" + ficha3_excel['ref'].iloc[0] + ".xlsx"
+    ficha3_resumo.to_excel(nome_pasta + nome_ficha3_resumo, index=False)
+    pivot_table_excel.to_excel(nome_pasta + nome_ficha3_excel)
+    print("Concluído!")
+
     ficha3 = ficha3.drop_duplicates(subset='item.code', keep='last')
     ficha3 = ficha3[['item.code', 'QTD_SALDO', 'ICMS_TOT_SALDO']]
     ficha3 = ficha3.rename(columns={'item.code': 'itemcode', 'QTD_SALDO': 'fq', 'ICMS_TOT_SALDO': 'fv'})
@@ -200,3 +231,34 @@ def gera_1050(est_ini_mes, reg_1050_ant):
 
 
     return mydata1050
+
+def carrega_blocoh(nome=""):
+
+    if nome == "":
+        nome_arq = NOME_BLOCOH
+    else:
+        nome_arq = nome
+
+    linhas_h010 = []
+
+    with open(nome_arq, "r", encoding="latin1") as f:
+        for linha in f:
+            # tira quebras de linha e separa pelos pipes
+            partes = linha.strip().split("|")
+
+            # garantir que tem pelo menos 2 colunas antes de checar índice 1
+            if len(partes) > 1 and partes[1] == "H010":
+                linhas_h010.append(partes)
+
+    # transforma em DataFrame
+    df_h010 = pd.DataFrame(linhas_h010)
+    df_h010 = df_h010.iloc[:, 1:-1]
+    df_h010.columns = ["REG", "COD_ITEM", "UNID", "QTD", "VL_UNIT",\
+                       "VL_ITEM", "IND_PROP", "COD_PART", "TXT_COMPL",\
+                       "COD_CTA", "VL_ITEM_IR"]
+
+    return df_h010
+
+def set_nome_pasta(novo_nome):
+    global nome_pasta
+    nome_pasta = novo_nome
