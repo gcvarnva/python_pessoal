@@ -1,4 +1,6 @@
 import sys
+from sys import exception
+
 pasta_bibliotecas = r"Z:\Dados\Projetos_python\bibliotecas"
 sys.path.append(str(pasta_bibliotecas))
 import util_gui
@@ -15,7 +17,12 @@ caminho_pasta = util_gui.selecionar_pasta(dir_inicial)
 data_hora_atual = datetime.now().strftime('%d-%m-%Y_%Hh%Mm%Ss')
 nome_pasta = f"{caminho_pasta}/pcat_{data_hora_atual}_ficms_{fator_icms_tot}_fconv_{fator_conversao}_div_{divisor}"
 os.makedirs(nome_pasta, exist_ok=True)
+set_nome_pasta(nome_pasta)
 
+os.chdir(caminho_pasta)
+#Carregando bloco H do contribuinte (início do período)
+blocoh = carrega_blocoh()
+cod_itens_blocoh = blocoh['COD_ITEM'].str.strip().dropna().unique().tolist()
 # Leitura do Registro 0000 da EFD
 caminho_completo = caminho_pasta + r'\EFD_Reg_0000.csv'
 EFD_Reg_0000 = pd.read_csv(caminho_completo, sep=';', encoding='utf-8', quotechar='"', skiprows=3, dtype=str,\
@@ -171,6 +178,8 @@ entradas_e_c170_com_st = entradas_e_c170.loc[\
 codigos_sem_repeticoes = entradas_e_c170_com_st['item_cod_efd_efd'].dropna().unique().tolist()
 entradas_e_c170 = \
 entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(codigos_sem_repeticoes)]
+entradas_e_c170 = \
+entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(cod_itens_blocoh)]
 # ###########################################################################################
 # FIM(Merge do c170 com a Tabela_1) #########################################################
 # ###########################################################################################
@@ -186,39 +195,40 @@ ligacoes_entradas = entradas_e_c170.groupby(['Código Produto ou Serviço_nota',
     .agg({'Valor Produto ou Serviço_nota': 'sum', 'Valor ICMS Operação_nota':'sum',\
           'Valor ICMS Substituição Tributária_nota':'sum',\
           'Valor Base Cálculo ICMS ST Retido Operação Anterior_nota':'sum'}).reset_index()
-caminho_completo = caminho_pasta + r'\ligacoes_entradas.xlsx'
+caminho_completo = nome_pasta + r'\ligacoes_entradas.xlsx'
 ligacoes_entradas.to_excel(caminho_completo, index=False)
 print("concluído!")
 # ###############################################################################################
 # Uniformizando os fatores de conversão ###########################################################
 # ###############################################################################################
-entradas_e_c170['razao'] = entradas_e_c170['qtd_efd'].astype(float)\
-/ entradas_e_c170['Quantidade Comercial_nota'].astype(float)
-mapeamento = entradas_e_c170[['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd', 'razao']]
-entradas_e_c170 = entradas_e_c170.drop('razao', axis=1)
-mapeamento_distinto = mapeamento.drop_duplicates()
-grupo_chave = ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd']
-# Para cada grupo, pegar a linha com o maior valor de 'razao'
-resultado = (
-    mapeamento_distinto
-    .sort_values('razao')  # organiza para que o menor venha primeiro
-    .drop_duplicates(subset=grupo_chave, keep='first')  # PEGA O MAIOR VALOR DA RAZÃO
-)
+if UNIFORMIZA_FATORES:
+    entradas_e_c170['razao'] = entradas_e_c170['qtd_efd'].astype(float)\
+    / entradas_e_c170['Quantidade Comercial_nota'].astype(float)
+    mapeamento = entradas_e_c170[['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd', 'razao']]
+    entradas_e_c170 = entradas_e_c170.drop('razao', axis=1)
+    mapeamento_distinto = mapeamento.drop_duplicates()
+    grupo_chave = ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd']
+    # Para cada grupo, pegar a linha com o maior valor de 'razao'
+    resultado = (
+        mapeamento_distinto
+        .sort_values('razao')  # organiza para que o menor venha primeiro
+        .drop_duplicates(subset=grupo_chave, keep='first')  # PEGA O MAIOR VALOR DA RAZÃO
+    )
 
-entradas_e_c170 = pd.merge(entradas_e_c170, resultado,
-                 on=['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd'],
-                 how='left', indicator='entrada_e_razao')
+    entradas_e_c170 = pd.merge(entradas_e_c170, resultado,
+                     on=['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd'],
+                     how='left', indicator='entrada_e_razao')
 
-if MODIFICA:
-    entradas_e_c170.loc[entradas_e_c170['razao']<1, 'razao'] = 1
-    entradas_e_c170['razao'] = np.floor(entradas_e_c170['razao'] * fator_conversao)
+    if MODIFICA:
+        entradas_e_c170.loc[entradas_e_c170['razao']<1, 'razao'] = 1
+        entradas_e_c170['razao'] = np.floor(entradas_e_c170['razao'] * fator_conversao)
 
-entradas_e_c170['qtd_efd'] = entradas_e_c170['Quantidade Comercial_nota'] * \
-entradas_e_c170['razao']
+    entradas_e_c170['qtd_efd'] = entradas_e_c170['Quantidade Comercial_nota'] * \
+    entradas_e_c170['razao']
 # ###############################################################################################
 # FIM (Uniformizando os fatores de conversão) #####################################################
 # ###############################################################################################
-# Parei aqui (30/09/25)
+
 
 # ###############################################################################################
 # Manipulando o entradas_e_c170 #################################################################
@@ -267,6 +277,9 @@ entradas.drop(columns='mes_aaaamm', inplace=True)
 entradas['mes_ref_efd'] = entradas['mes_ref_efd'].astype(str).str.strip()
 entradas['COD_ITEM'] = entradas['COD_ITEM'].astype(str).str.strip()
 entradas['cod_unidade_efd'] = entradas['cod_unidade_efd'].astype(str).str.strip()
+
+entradas = entradas.loc[entradas['COD_ITEM'].isin(codigos_sem_repeticoes)]
+entradas = entradas.loc[entradas['COD_ITEM'].isin(cod_itens_blocoh)]
 # ###############################################################################################
 # FIM (Gera um DataFrame com todas as notas de entrada (inclusive as de operação própria)) ######
 # ###############################################################################################
@@ -305,8 +318,17 @@ if TEM_0220:
     )
     # Atualizar fat_0220 apenas onde houver valor correspondente em fat_novo
     entradas['fat_0220'] = df_merge['fat_novo'].combine_first(entradas['fat_0220'])
+
+    # entradas.loc[entradas['fat_0220']>=2, 'fat_0220'] = np.trunc(entradas['fat_0220']/2)
+    # entradas.loc[entradas['fat_0220'] >= 4, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 4)
+    # entradas.loc[entradas['fat_0220'] >= 8, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 8)
+    # entradas.loc[entradas['fat_0220'] >= 12, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 12)
+    # entradas.loc[entradas['fat_0220'] >= 16, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 16)
+    entradas.loc[entradas['fat_0220'] >= 2, 'fat_0220'] = 2
+
     entradas['QTD'] = entradas['QTD'] * entradas['fat_0220']
-    entradas['QTD'] = entradas['QTD'].apply(dividir_com_preservacao)
+    if DIVIDIR:
+        entradas['QTD'] = entradas['QTD'].apply(dividir_com_preservacao)
     entradas = entradas.drop(columns=['fat_0220'])
 # ###############################################################################################
 # FIM (Lê o EFD0220) ############################################################################
@@ -399,7 +421,7 @@ entradas['aliq'] = entradas['aliq'].fillna(18)
 aliquotas_entradas = entradas.drop_duplicates(
     subset=['COD_ITEM', 'descricao_efd', 'Código NCM_nota', 'aliq', 'mes_ref_efd']
 )[['COD_ITEM', 'descricao_efd', 'Código NCM_nota', 'aliq', 'mes_ref_efd']]
-caminho_completo = caminho_pasta + r'\ligacoes_aliquotas_entradas.xlsx'
+caminho_completo = nome_pasta + r'\ligacoes_aliquotas_entradas.xlsx'
 aliquotas_entradas.to_excel(caminho_completo, index=False)
 print("Concluído!")
 
@@ -435,6 +457,8 @@ saidas = tabela_1.loc[tabela_1['IND_OPER_nota']==1]
 saidas = saidas.loc[saidas['Código CFOP (04 Posições)_nota'].isin(lista_cfops_st_teste)]
 saidas = \
 saidas.loc[saidas['Código Produto ou Serviço_nota'].isin(codigos_sem_repeticoes)]
+saidas = \
+saidas.loc[saidas['Código Produto ou Serviço_nota'].isin(cod_itens_blocoh)]
 saidas = saidas.rename(columns={'chave':'CHV_DOC',\
                                 'Data Emissão_nota':'DATA',\
                                 'numero_item':'NUM_ITEM',\
@@ -456,21 +480,46 @@ saidas = pd.merge(saidas, nfe_sp_aliquotas,
                  how='left', indicator='saida_e_aliquotas')
 saidas['aliq'] = saidas['aliq'].fillna(18)
 #saidas = saidas.loc[saidas['saida_e_0200']=='both']
+
+# ###############################################################################################
+# # Conversão de unidades das saídas ############################################################
+# ###############################################################################################
+saidas['cod_unidade_efd'] = saidas['cod_unidade_efd'].str.strip()
+efd0220['cod_unidade_efd'] = efd0220['cod_unidade_efd'].str.strip()
+saidas['fator'] = 1
+saidas = pd.merge(saidas, efd0220[['cod_unidade_efd', 'fat_novo']], on=['cod_unidade_efd'],\
+                  how='left', indicator='_tem_fator')
+saidas.loc[saidas['_tem_fator']=='both', 'fator'] = saidas['fat_novo']
+
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='CX'), 'fator'] = 12
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='EV'), 'fator'] = 6
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='FD'), 'fator'] = 12
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='CJ'), 'fator'] = 12
+
+saidas['QTD'] = saidas['QTD']*saidas['fator']
+saidas.drop(columns=['fator', 'fat_novo', '_tem_fator'], inplace=True)
+
 saidas = saidas[saidas['QTD'] != 0]
 saidas['VL_CONFR'] = saidas['vlr_prod'] * saidas['aliq']/100
-saidas['ICMS_TOT'] = 0
+saidas['ICMS_TOT'] = 0.0
 saidas['COD_LEGAL'] = "1"
 
-saidas.loc[saidas['VL_CONFR']<0.01,'VL_CONFR'] = 0
+saidas.loc[saidas['VL_CONFR']<0.01,'VL_CONFR'] = 0.0
 saidas.loc[saidas['VL_CONFR']==0,'COD_LEGAL'] = "0"
 
 saidas['SUBTIPO'] = 2
 saidas.loc[saidas['CFOP'].isin(dev_entrada),'SUBTIPO'] = 1
 saidas.loc[saidas['CFOP'].isin(dev_entrada),'COD_LEGAL'] = ""
-saidas.loc[saidas['CFOP'].isin(dev_entrada),'VL_CONFR'] = 0
+saidas.loc[saidas['CFOP'].isin(dev_entrada),'VL_CONFR'] = 0.0
 primeira_op = saidas['icms'] + saidas['icms_st']
 segunda_op = saidas['bc_icms_st_ant'] * saidas['aliq']/100
 saidas.loc[saidas['CFOP'].isin(dev_entrada),'ICMS_TOT'] = primeira_op.combine(segunda_op, max)
+
+df_icms_tot = saidas[['COD_ITEM', 'QTD', 'VL_CONFR']].copy()
+df_icms_tot['ICMS_TOT_UNI'] = df_icms_tot['VL_CONFR'] / df_icms_tot['QTD'] * 4.0
+df_icms_tot = df_icms_tot.drop_duplicates(subset=['COD_ITEM'])
+df_icms_tot = df_icms_tot.rename(columns={'ICMS_TOT_UNI': 'ICMS_TOT_UNI_NOVO'})
+
 print("Concluído!")
 # ############################################################################################################# #
 # FIM (Montagem das Saídas) ################################################################################### #
@@ -537,12 +586,43 @@ print("Concluído!")
 print("Calculando o estoque inicial...", end="", flush=True)
 est_ini = calcular_estoque_inicial_por_produto(dados)
 est_ini = est_ini.sort_values(by=['DATA', 'SUBTIPO'])
-est_ini['ICMS_TOT_INI'] = est_ini['estoque_inicial_minimo'] * est_ini['ICMS_TOT_UNI']
 est_ini['ano_mes'] = est_ini['DATA'].dt.to_period('M')
-print("Concluído!")
+blocoh = blocoh.rename(columns={'QTD': 'QTD_blocoh'})
+blocoh['QTD_blocoh'] = blocoh['QTD_blocoh'].str.replace(",", ".", regex=False).astype(float)
+est_ini = pd.merge(est_ini, blocoh[['COD_ITEM', 'QTD_blocoh']],\
+                           on=['COD_ITEM'], how='left', indicator = True)
+if not est_ini.loc[est_ini['_merge'] != 'both'].empty:
+    print("ERRO - existem registros na PCAT que não estão no Bloco H!!!!!")
+    raise exception()
+#est_ini = est_ini.loc[est_ini['QTD_blocoh']>=est_ini['estoque_inicial_minimo']]
+#est_ini['estoque_inicial_minimo'] = est_ini['QTD_blocoh']
+est_ini = est_ini.loc[(est_ini['estoque_inicial_minimo']>=0) & \
+                      (est_ini['estoque_inicial_minimo']<=4*est_ini['QTD_blocoh'])]
 
+est_ini['ICMS_TOT_INI'] = est_ini['estoque_inicial_minimo'] * est_ini['ICMS_TOT_UNI']
+est_ini.drop(columns='QTD_blocoh', inplace=True)
+
+if ICMS_TOT_PELAS_SAIDAS:
+    est_ini = pd.merge(est_ini, df_icms_tot[['COD_ITEM', 'ICMS_TOT_UNI_NOVO']],\
+                             on='COD_ITEM', how='left', indicator='_teste')
+    est_ini.loc[est_ini['_teste']=='both', 'ICMS_TOT_UNI'] = est_ini['ICMS_TOT_UNI_NOVO']
+    est_ini['ICMS_TOT_INI'] = est_ini['estoque_inicial_minimo'] * est_ini['ICMS_TOT_UNI']
+    est_ini.drop(columns=['_teste', 'ICMS_TOT_UNI_NOVO'], inplace=True)
+
+
+print("Concluído!")
+print("Analisando confronto entre os estoques da PCAT e o Bloco H...", end="", flush=True)
+estoque_pcat = est_ini[['COD_ITEM', 'descricao_efd', 'estoque_inicial_minimo', 'ICMS_TOT_INI']]\
+    .drop_duplicates(subset='COD_ITEM')
+estoque_pcat['COD_ITEM'] = estoque_pcat['COD_ITEM'].apply(lambda x: x.strip())
+blocoh['COD_ITEM'] = blocoh['COD_ITEM'].apply(lambda x: x.strip())
+df_anal_estoque = pd.merge(estoque_pcat, blocoh[['COD_ITEM', 'QTD_blocoh', 'VL_UNIT']],\
+                           on=['COD_ITEM'], how='left', indicator = 'True')
+caminho_completo = nome_pasta + r"\teste_pcat_e_blocoh.xlsx"
+df_anal_estoque.to_excel(caminho_completo, index=False)
+print("Concluído!")
 print("gerando resumo dos códigos de item...", end="", flush=True)
-caminho_completo = caminho_pasta + r"\resumo_cod_item.xlsx"
+caminho_completo = nome_pasta + r"\resumo_cod_item.xlsx"
 # Agrupar por COD_ITEM e somar os campos desejados
 resumo = (
     est_ini.groupby("COD_ITEM", as_index=False)
