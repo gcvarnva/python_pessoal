@@ -11,6 +11,7 @@ import util_ressarcimento
 from datetime import datetime
 import matplotlib.pyplot as plt
 from util_geracao import *
+from pathlib import Path
 
 dir_inicial = r"Z:"
 caminho_pasta = util_gui.selecionar_pasta(dir_inicial)
@@ -28,6 +29,11 @@ caminho_completo = caminho_pasta + r'\EFD_Reg_0000.csv'
 EFD_Reg_0000 = pd.read_csv(caminho_completo, sep=';', encoding='utf-8', quotechar='"', skiprows=3, dtype=str,\
                            usecols=['Nome Entidade', 'Mês Referência', 'Número CNPJ',\
                                     'Número Inscrição Estadual' ,'Código Município'])
+
+# Lê o arquivo Excel com a descrição dos CFOPs
+pasta_atual = Path(__file__).parent  # pega a pasta onde o script está
+caminho_excel = pasta_atual / "CFOPs Sumarizados 2021_06_10.xlsx"
+desc_cfop, sugest_cfop = util_ressarcimento.le_desc_CFOPs(caminho_excel)
 
 # ############################################################################################################# #
 # Leitura dos arquivos auxiliares da geração (registro 0150) ################################################## #
@@ -178,10 +184,25 @@ entradas_e_c170_com_st = entradas_e_c170.loc[\
 codigos_sem_repeticoes = entradas_e_c170_com_st['item_cod_efd_efd'].dropna().unique().tolist()
 entradas_e_c170 = \
 entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(codigos_sem_repeticoes)]
-entradas_e_c170 = \
-entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(cod_itens_blocoh)]
+# entradas_e_c170 = \
+# entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(cod_itens_blocoh)]
 # ###########################################################################################
 # FIM(Merge do c170 com a Tabela_1) #########################################################
+# ###########################################################################################
+
+# ###########################################################################################
+# Tabela de CFOPs das entradas ##############################################################
+# ###########################################################################################
+print("gerando CFOPs de entrada da EFD... ", end="", flush=True)
+cfops_c170 = entradas_e_c170.groupby(['cfop_efd'])\
+    .agg({'qtd_efd':'sum'}).reset_index().sort_values(by='qtd_efd', ascending=False)
+cfops_c170['cfop_efd'] = cfops_c170['cfop_efd'].astype(str).str.strip()
+cfops_c170['Desc_CFOPs'] = cfops_c170['cfop_efd'].map(desc_cfop)
+caminho_completo = nome_pasta + r'\cfops_entradas.xlsx'
+cfops_c170.to_excel(caminho_completo, index=False)
+print("concluído!")
+# ###########################################################################################
+# FIM (Tabela de CFOPs das entradas) ########################################################
 # ###########################################################################################
 
 # ###########################################################################################
@@ -204,6 +225,15 @@ print("concluído!")
 if UNIFORMIZA_FATORES:
     entradas_e_c170['razao'] = entradas_e_c170['qtd_efd'].astype(float)\
     / entradas_e_c170['Quantidade Comercial_nota'].astype(float)
+
+    print("gerando tabela de conversão de unidades das entradas... ", end="", flush=True)
+    conv_unid_efd = entradas_e_c170[
+        ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota',\
+         'item_cod_efd_efd', 'cod_unidade_efd', 'razao']].drop_duplicates()
+    caminho_completo = nome_pasta + r'\conversao_unidades_efd.xlsx'
+    conv_unid_efd.to_excel(caminho_completo, index=False)
+    print("Concluído!")
+
     mapeamento = entradas_e_c170[['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd', 'razao']]
     entradas_e_c170 = entradas_e_c170.drop('razao', axis=1)
     mapeamento_distinto = mapeamento.drop_duplicates()
@@ -279,7 +309,7 @@ entradas['COD_ITEM'] = entradas['COD_ITEM'].astype(str).str.strip()
 entradas['cod_unidade_efd'] = entradas['cod_unidade_efd'].astype(str).str.strip()
 
 entradas = entradas.loc[entradas['COD_ITEM'].isin(codigos_sem_repeticoes)]
-entradas = entradas.loc[entradas['COD_ITEM'].isin(cod_itens_blocoh)]
+#entradas = entradas.loc[entradas['COD_ITEM'].isin(cod_itens_blocoh)]
 # ###############################################################################################
 # FIM (Gera um DataFrame com todas as notas de entrada (inclusive as de operação própria)) ######
 # ###############################################################################################
@@ -324,7 +354,7 @@ if TEM_0220:
     # entradas.loc[entradas['fat_0220'] >= 8, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 8)
     # entradas.loc[entradas['fat_0220'] >= 12, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 12)
     # entradas.loc[entradas['fat_0220'] >= 16, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 16)
-    entradas.loc[entradas['fat_0220'] >= 2, 'fat_0220'] = 2
+    # entradas.loc[entradas['fat_0220'] >= 2, 'fat_0220'] = 2
 
     entradas['QTD'] = entradas['QTD'] * entradas['fat_0220']
     if DIVIDIR:
@@ -457,8 +487,8 @@ saidas = tabela_1.loc[tabela_1['IND_OPER_nota']==1]
 saidas = saidas.loc[saidas['Código CFOP (04 Posições)_nota'].isin(lista_cfops_st_teste)]
 saidas = \
 saidas.loc[saidas['Código Produto ou Serviço_nota'].isin(codigos_sem_repeticoes)]
-saidas = \
-saidas.loc[saidas['Código Produto ou Serviço_nota'].isin(cod_itens_blocoh)]
+# saidas = \
+# saidas.loc[saidas['Código Produto ou Serviço_nota'].isin(cod_itens_blocoh)]
 saidas = saidas.rename(columns={'chave':'CHV_DOC',\
                                 'Data Emissão_nota':'DATA',\
                                 'numero_item':'NUM_ITEM',\
@@ -486,15 +516,25 @@ saidas['aliq'] = saidas['aliq'].fillna(18)
 # ###############################################################################################
 saidas['cod_unidade_efd'] = saidas['cod_unidade_efd'].str.strip()
 efd0220['cod_unidade_efd'] = efd0220['cod_unidade_efd'].str.strip()
+
+print("gerando tabela de conversão de unidades das saídas... ", end="", flush=True)
+conv_unid_saidas = saidas[\
+    ['COD_ITEM', 'cod_unidade_efd']].drop_duplicates()
+caminho_completo = nome_pasta + r'\conversao_unidades_saidas.xlsx'
+conv_unid_saidas.to_excel(caminho_completo, index=False)
+print("Concluído!")
+
+
 saidas['fator'] = 1
 saidas = pd.merge(saidas, efd0220[['cod_unidade_efd', 'fat_novo']], on=['cod_unidade_efd'],\
                   how='left', indicator='_tem_fator')
 saidas.loc[saidas['_tem_fator']=='both', 'fator'] = saidas['fat_novo']
 
 saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='CX'), 'fator'] = 12
-saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='EV'), 'fator'] = 6
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='EV'), 'fator'] = 12
 saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='FD'), 'fator'] = 12
-saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='CJ'), 'fator'] = 12
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='CJ'), 'fator'] = 30
+saidas.loc[(saidas['_tem_fator']=='left_only') & (saidas['cod_unidade_efd']=='PC'), 'fator'] = 4
 
 saidas['QTD'] = saidas['QTD']*saidas['fator']
 saidas.drop(columns=['fator', 'fat_novo', '_tem_fator'], inplace=True)
@@ -502,7 +542,10 @@ saidas.drop(columns=['fator', 'fat_novo', '_tem_fator'], inplace=True)
 saidas = saidas[saidas['QTD'] != 0]
 saidas['VL_CONFR'] = saidas['vlr_prod'] * saidas['aliq']/100
 saidas['ICMS_TOT'] = 0.0
-saidas['COD_LEGAL'] = "1"
+
+saidas['COD_LEGAL'] = "0"
+saidas.loc[saidas['CFOP']=='5405', 'COD_LEGAL'] = "1"
+saidas.loc[saidas['COD_LEGAL']=='0', 'VL_CONFR'] = 0.0
 
 saidas.loc[saidas['VL_CONFR']<0.01,'VL_CONFR'] = 0.0
 saidas.loc[saidas['VL_CONFR']==0,'COD_LEGAL'] = "0"
@@ -516,7 +559,7 @@ segunda_op = saidas['bc_icms_st_ant'] * saidas['aliq']/100
 saidas.loc[saidas['CFOP'].isin(dev_entrada),'ICMS_TOT'] = primeira_op.combine(segunda_op, max)
 
 df_icms_tot = saidas[['COD_ITEM', 'QTD', 'VL_CONFR']].copy()
-df_icms_tot['ICMS_TOT_UNI'] = df_icms_tot['VL_CONFR'] / df_icms_tot['QTD'] * 4.0
+df_icms_tot['ICMS_TOT_UNI'] = df_icms_tot['VL_CONFR'] / df_icms_tot['QTD'] * 1.5
 df_icms_tot = df_icms_tot.drop_duplicates(subset=['COD_ITEM'])
 df_icms_tot = df_icms_tot.rename(columns={'ICMS_TOT_UNI': 'ICMS_TOT_UNI_NOVO'})
 
@@ -589,15 +632,20 @@ est_ini = est_ini.sort_values(by=['DATA', 'SUBTIPO'])
 est_ini['ano_mes'] = est_ini['DATA'].dt.to_period('M')
 blocoh = blocoh.rename(columns={'QTD': 'QTD_blocoh'})
 blocoh['QTD_blocoh'] = blocoh['QTD_blocoh'].str.replace(",", ".", regex=False).astype(float)
+blocoh_util = blocoh[['COD_ITEM', 'QTD_blocoh']].copy()
+
+est_ini = est_ini.loc[(est_ini['estoque_inicial_minimo']==0) | \
+    ((est_ini['estoque_inicial_minimo']>0) &\
+        (est_ini['COD_ITEM'].isin(blocoh_util['COD_ITEM'])))]
 est_ini = pd.merge(est_ini, blocoh[['COD_ITEM', 'QTD_blocoh']],\
                            on=['COD_ITEM'], how='left', indicator = True)
-if not est_ini.loc[est_ini['_merge'] != 'both'].empty:
-    print("ERRO - existem registros na PCAT que não estão no Bloco H!!!!!")
-    raise exception()
+# if not est_ini.loc[est_ini['_merge'] != 'both'].empty:
+#     print("ERRO - existem registros na PCAT que não estão no Bloco H!!!!!")
+#     raise exception()
 #est_ini = est_ini.loc[est_ini['QTD_blocoh']>=est_ini['estoque_inicial_minimo']]
 #est_ini['estoque_inicial_minimo'] = est_ini['QTD_blocoh']
-est_ini = est_ini.loc[(est_ini['estoque_inicial_minimo']>=0) & \
-                      (est_ini['estoque_inicial_minimo']<=4*est_ini['QTD_blocoh'])]
+# est_ini = est_ini.loc[(est_ini['estoque_inicial_minimo']>=0) & \
+#                       (est_ini['estoque_inicial_minimo']<=4*est_ini['QTD_blocoh'])]
 
 est_ini['ICMS_TOT_INI'] = est_ini['estoque_inicial_minimo'] * est_ini['ICMS_TOT_UNI']
 est_ini.drop(columns='QTD_blocoh', inplace=True)
@@ -618,6 +666,8 @@ estoque_pcat['COD_ITEM'] = estoque_pcat['COD_ITEM'].apply(lambda x: x.strip())
 blocoh['COD_ITEM'] = blocoh['COD_ITEM'].apply(lambda x: x.strip())
 df_anal_estoque = pd.merge(estoque_pcat, blocoh[['COD_ITEM', 'QTD_blocoh', 'VL_UNIT']],\
                            on=['COD_ITEM'], how='left', indicator = 'True')
+df_anal_estoque.rename(columns={'estoque_inicial_minimo': 'Estoque_PCAT',\
+                                'QTD_blocoh': 'Estoque_BlocoH'}, inplace=True)
 caminho_completo = nome_pasta + r"\teste_pcat_e_blocoh.xlsx"
 df_anal_estoque.to_excel(caminho_completo, index=False)
 print("Concluído!")
@@ -636,16 +686,11 @@ resumo = (
         "QTD_SAIDA": "sum"
         })
 )
+resumo.rename(columns={'estoque_inicial_minimo': 'Estoque_Ini'}, inplace=True)
 # Exportar para Excel
 resumo.to_excel(caminho_completo, index=False)
 print("Concluído!")
 
-print("Gerando os estoques iniciais, para confronto com o Bloco H...", end="", flush=True)
-est_ini_nov2019 = est_ini[est_ini['ano_mes'].astype(str) == '2019-11'].copy()
-est_ini_nov2019 = est_ini_nov2019[['ano_mes', 'COD_ITEM', 'estoque_inicial_minimo']].drop_duplicates()
-nome_est_nov19 = f"{nome_pasta}/estoques_iniciais-{CNPJ_ENTIDADE}_31_10_2019.xlsx"
-est_ini_nov2019.to_excel(nome_est_nov19, index=False)
-print("Concluído!")
 # ############################################################################################################# #
 # FIM (Cálculo do estoque inicial) ############################################################################ #
 # ############################################################################################################# #
@@ -657,6 +702,9 @@ print("Concluído!")
 print("Iniciando Montagem e geração dos arquivos da PCAT...")
 # Cria coluna auxiliar com o ano e mês
 est_ini['ano_mes'] = est_ini['DATA'].dt.to_period('M')
+
+ficha3_primeira, df_icms_tot_ini = gerar_ficha3_e_1050(est_ini)
+
 cods_ress = ['1', '2', '3', '4']
 # Garante que não haja duplicações por COD_ITEM no mesmo mês
 grupo_mes = est_ini.groupby(['ano_mes', 'COD_ITEM']).agg({
@@ -668,7 +716,6 @@ grupo_mes = est_ini.groupby(['ano_mes', 'COD_ITEM']).agg({
 reg_1050_ant = pd.DataFrame(columns=['itemcode', 'iq', 'iv', 'fq', 'fv'])
 for periodo, grupo in grupo_mes.groupby('ano_mes'):
     nome_arquivo = f"{nome_pasta}/RessarcimentoST-{CNPJ_ENTIDADE}_{periodo.strftime('%Y-%m')}.txt"
-    #nome_arquivo = f"C:/temp_calculo/RessarcimentoST-{CNPJ_ENTIDADE}_{periodo.strftime('%Y-%m')}.txt"
 
     periodo_0000 = periodo.strftime('%m%Y')
     linha_0000 = f"0000|{periodo_0000}|{NOME_ENTIDADE}|{CNPJ_ENTIDADE}|{IE_ENTIDADE}|{COD_MUN_ENTIDADE}|{COD_VER}|{COD_FIN}\n"
@@ -693,7 +740,6 @@ for periodo, grupo in grupo_mes.groupby('ano_mes'):
         reg_1050_ant = reg_1050_ant.rename(columns={'iq_x': 'iq', 'fq_x':'fq' , 'iv_x': 'iv', 'fv_x': 'fv'})
 
 
-    # raise SystemExit("Parando aqui para DEBUG!")
 
     # Percorre cada linha do reg0150 e escreve no arquivo
     for _, row in reg0150.iterrows():
