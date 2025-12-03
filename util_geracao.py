@@ -3,6 +3,7 @@ import sys
 pasta_bibliotecas = r"Z:\Dados\Projetos_python\bibliotecas"
 sys.path.append(str(pasta_bibliotecas))
 import util_ressarcimento
+from tqdm.auto import tqdm
 nome_pasta = ""
 
 # Dicionário: {'código IBGE': 'tamanho da IE'}
@@ -54,8 +55,10 @@ lista_cfops_st_teste = ['1101','1102','1111','1113','1116','1117','1118','1120',
 dev_entrada = ['5201', '5202', '5205', '5206', '5207', '5208', '5209', '5210', '5410', '5411', '5412', '5413', '5414', '6201', '6202', '6205', '6206', '6207', '6208', '6209', '6210', '6410', '6411', '6412', '6413', '6414', '5661', '5662', '6661', '6662']
 dev_saida = ['1411']
 data_corte = "1/11/2019"
+file_pos_val = r'Z:\Dados\Projetos_python\Tab_CFOPs -pos_validador.xlsx'
+fat = 0.5
 
-divisor = 3.1
+divisor = 1.0
 
 def dividir_com_preservacao(v):
     if pd.isna(v):
@@ -73,8 +76,6 @@ def remover_caracteres_nao_latin1(texto):
         texto_latin1 = texto.encode('latin-1', errors='ignore').decode('latin-1', errors='ignore')
         return texto_latin1.replace('?', '')
     return texto
-
-
 
 def calcular_estoque_inicial_por_produto(df):
     # Garante que a coluna DATA esteja em formato datetime
@@ -108,7 +109,6 @@ def calcular_estoque_inicial_por_produto(df):
 
     resultado_final = pd.concat(resultados).sort_values(['COD_ITEM', 'DATA'])
     return resultado_final
-
 
 def gera_0200(est_ini):
     reg0200 = est_ini[['COD_ITEM', 'descricao_efd', 'Código GTIN_nota','cod_unidade_efd', 'Código NCM_nota',\
@@ -262,3 +262,320 @@ def carrega_blocoh(nome=""):
 def set_nome_pasta(novo_nome):
     global nome_pasta
     nome_pasta = novo_nome
+
+def gerar_ficha3_e_1050(est_ini, criar1050 = True):
+
+    # #######################################################################################################
+    # Preparação dos Dados ##################################################################################
+    # #######################################################################################################
+    est_ini = est_ini.copy()
+    dados_tmp = est_ini.copy()
+    dados_tmp = dados_tmp.loc[dados_tmp['ano_mes'] == dados_tmp['ano_mes'].min()]
+    dados_tmp['ref'] = dados_tmp['ano_mes'].apply(lambda x: str(x)[-2:] + str(x)[:4])
+    dados_tmp['date_E_S'] = dados_tmp['DATA'].apply(lambda x: x.strftime('%d%m%Y'))
+    mydata1100 = dados_tmp[['ref', 'date_E_S', 'IND_OPER', 'COD_ITEM', 'CFOP', 'QTD', 'ICMS_TOT',
+                            'VL_CONFR', 'COD_LEGAL']].copy()
+    mydata1100 = mydata1100.rename(columns={'IND_OPER': 'typeop', 'COD_ITEM': 'item.code',
+                                            'CFOP': 'cfop', 'QTD': 'quant', 'ICMS_TOT': 'icms_sup',
+                                            'VL_CONFR': 'confront_value_in_S', 'COD_LEGAL': 'legal_code'})
+    mydata1200 = pd.DataFrame(columns=['ref', 'date_E_S', 'typeop', 'item.code', 'cfop', 'quant',
+                                       'icms_sup', 'confront_value_in_S', 'legal_code'])
+    dados_tmp_sdupl = dados_tmp.drop_duplicates(subset='COD_ITEM')
+    mydata1050 = \
+        dados_tmp_sdupl[['ref', 'COD_ITEM', \
+                         'estoque_inicial_minimo', 'ICMS_TOT_INI']].copy()
+    mydata1050 = mydata1050.rename(columns={'COD_ITEM': 'itemcode', 'estoque_inicial_minimo': 'iq',\
+                                            'ICMS_TOT_INI': 'iv'})
+    # #######################################################################################################
+    # FIM (Preparação dos Dados) ############################################################################
+    # #######################################################################################################
+
+
+    ficha3_1 = mydata1100[['ref', 'date_E_S', 'typeop', 'item.code', 'cfop', 'quant',
+                           'icms_sup', 'confront_value_in_S', 'legal_code']].copy()
+    ficha3_2 = mydata1200[['ref', 'date_E_S', 'typeop', 'item.code', 'cfop', 'quant',
+                           'icms_sup', 'confront_value_in_S', 'legal_code']].copy()
+
+    if ficha3_2.empty:
+        ficha3 = ficha3_1
+    else:
+        ficha3 = pd.concat([ficha3_1, ficha3_2], ignore_index=True)
+
+    # Substituir strings vazias por '0' e converter para int
+    ficha3['legal_code'] = ficha3['legal_code'].str.strip().replace('', '0').astype(int)
+
+    # Converter 'ref' para datetime (assumindo que o formato é 'mmaaaa')
+    ficha3['ref'] = pd.to_datetime(ficha3['ref'], format='%m%Y')
+
+    # Converter 'date_E_S' para datetime (assumindo que o formato é 'ddmmaaaa')
+    ficha3['date_E_S'] = pd.to_datetime(ficha3['date_E_S'], format='%d%m%Y')
+
+    # Ordenar o DataFrame pelas colunas especificadas
+    # ficha3 = ficha3.sort_values(by=['ref', 'item.code', 'date_E_S', 'typeop'])
+    ficha3 = ficha3.sort_values(by=['ref', 'item.code', 'date_E_S'])
+    ficha3 = ficha3.reset_index(drop=True)
+
+    # ######################################################################################################
+    # Leitura do Excel com os CFOPs do pós-validador #######################################################
+    # ######################################################################################################
+    df_cfops_ress = pd.read_excel(file_pos_val)
+    cfops_que_mudam = ['1662', '1504', '2504', '5661', '5662', '6661', '6662', '1661', '2661', '2662']
+    # ######################################################################################################
+    # FIM (Leitura do Excel com os CFOPs do pós-validador) #################################################
+    # ######################################################################################################
+
+    # ######################################################################################################
+    # Verificação de CFOPs não válidos para ressarcimento ##################################################
+    # ######################################################################################################
+    # Selecionando os CFOPs não válidos para ressarcimento
+    cfops_nao_validos = df_cfops_ress.loc[df_cfops_ress['Válido para Ressarcimento?'] == 'N', 'CFOP']
+    # Verificando se algum dos CFOPs de 'ficha3' está na lista de CFOPs não válidos
+    if ficha3['cfop'].isin(cfops_nao_validos).any():
+        raise ValueError("Existem CFOPs não válidos para ressarcimento no conjunto de dados.")
+    else:
+        print(f"Sucesso: Todos os CFOPs presentes no arquivo do Contribuinte são aplicáveis ao Ressarcimento!")
+    # ######################################################################################################
+    # FIM (Verificação de CFOPs não válidos para ressarcimento) ############################################
+    # ######################################################################################################
+
+    # ######################################################################################################
+    # Classificação das entradas e devoluções de compras ###################################################
+    # ######################################################################################################
+    ficha3['E_Dev_E'] = 0.0
+    # Primeiro, vamos filtrar 'df_cfops_ress' para obter apenas as linhas válidas para ressarcimento
+    condicoes_entradas = (df_cfops_ress['Entrada ou Saída'] == 'E') & \
+                         (df_cfops_ress['Válido para Ressarcimento?'] == 'S')
+
+    # Filtrar CFOPs válidos com SINAL '1' e '-1'
+    cfops_entradas_1 = df_cfops_ress[condicoes_entradas & (df_cfops_ress['SINAL'] == 1)]
+    cfops_entradas_neg1 = df_cfops_ress[condicoes_entradas & (df_cfops_ress['SINAL'] == -1)]
+
+    # Criar listas dos CFOPs para comparação
+    cfops_lista_ent_1 = cfops_entradas_1['CFOP'].tolist()
+    cfops_lista_ent_1 = [str(cfop) for cfop in cfops_lista_ent_1]
+    cfops_lista_ent_neg1 = cfops_entradas_neg1['CFOP'].tolist()
+    cfops_lista_ent_neg1 = [str(cfop) for cfop in cfops_lista_ent_neg1]
+
+    # Usar `loc` para definir os valores em 'E_Dev_E' baseado nos CFOPs filtrados
+    ficha3.loc[ficha3['cfop'].isin(cfops_lista_ent_1), 'E_Dev_E'] = ficha3['quant']
+    ficha3.loc[ficha3['cfop'].isin(cfops_lista_ent_neg1), 'E_Dev_E'] = -ficha3['quant']
+    # ######################################################################################################
+    # FIM (Classificação das entradas e devoluções de compras) #############################################
+    # ######################################################################################################
+
+    # ######################################################################################################
+    # Classificação das saídas e devoluções de saídas ######################################################
+    # ######################################################################################################
+    ficha3['S_Dev_S'] = 0.0
+    # Primeiro, vamos filtrar 'df_cfops_ress' para obter apenas as linhas válidas para ressarcimento
+    condicoes_saidas = (df_cfops_ress['Entrada ou Saída'] == 'S') & \
+                       (df_cfops_ress['Válido para Ressarcimento?'] == 'S')
+
+    # Filtrar CFOPs válidos com SINAL '1' e '-1'
+    cfops_saidas_1 = df_cfops_ress[condicoes_saidas & (df_cfops_ress['SINAL'] == 1)]
+    cfops_saidas_neg1 = df_cfops_ress[condicoes_saidas & (df_cfops_ress['SINAL'] == -1)]
+
+    # Criar listas dos CFOPs para comparação
+    cfops_lista_sai_1 = cfops_saidas_1['CFOP'].tolist()
+    cfops_lista_sai_1 = [str(cfop) for cfop in cfops_lista_sai_1]
+    cfops_lista_sai_neg1 = cfops_saidas_neg1['CFOP'].tolist()
+    cfops_lista_sai_neg1 = [str(cfop) for cfop in cfops_lista_sai_neg1]
+
+    # Usar `loc` para definir os valores em 'E_Dev_E' baseado nos CFOPs filtrados
+    ficha3.loc[ficha3['cfop'].isin(cfops_lista_sai_1), 'S_Dev_S'] = ficha3['quant']
+    ficha3.loc[ficha3['cfop'].isin(cfops_lista_sai_neg1), 'S_Dev_S'] = -ficha3['quant']
+    # ######################################################################################################
+    # FIM (Classificação das saídas e devoluções de saídas) ################################################
+    # ######################################################################################################
+
+    ficha3['ref'] = ficha3['ref'].dt.strftime('%m%Y')
+
+    #########################################################################################
+    # Gera a Ficha 3 da PCAT ################################################################
+    #########################################################################################
+    # Criar as colunas abaixo, todas vazias em ficha3
+    ficha3['QTD_SALDO'] = 0.0
+    ficha3['ICMS_SAIDA_UNI'] = 0.0
+    ficha3['ICMS_SAIDA'] = 0.0
+    ficha3['ICMS_TOT_SALDO'] = 0.0
+    ficha3['VLR_RESSARCIMENTO'] = 0.0
+    ficha3['VLR_COMPLEMENTO'] = 0.0
+
+    ref_ant = ficha3.loc[0, 'ref']
+    primeira_linha = True
+
+    ficha3_ref_filtrado = ficha3[ficha3['ref'] == ref_ant]
+    # Criando o dicionário inicial com todos os valores de 'item.code' como False
+    unique_item_codes = ficha3_ref_filtrado['item.code'].unique()
+    item_status = {code: False for code in unique_item_codes}
+
+    df_icms_tot_ini = est_ini[['COD_ITEM', 'estoque_inicial_minimo', 'ICMS_TOT_INI']].\
+        drop_duplicates(subset='COD_ITEM').copy()
+    df_icms_tot_ini = df_icms_tot_ini.rename(columns={'estoque_inicial_minimo': 'QTD_INI'})
+    df_icms_tot_ini['calculado'] = False
+    # Iterar sobre as linhas do DataFrame
+    for index, row in tqdm(ficha3.iterrows(), total=ficha3.shape[0], desc="Processando"):
+        itemcode_atual = row['item.code']
+        ref_atual = row['ref']
+
+        cfop_tmp = row['cfop']
+        if cfop_tmp in cfops_que_mudam:
+            zes = aplicar_regra_linha(cfop_tmp, row['ref'])
+            if zes == 'E':
+                ficha3.at[index, 'E_Dev_E'] = 0
+            elif zes == 'S':
+                ficha3.at[index, 'S_Dev_S'] = 0
+
+        # Verifica se o 'ref' mudou, se sim, resete todos os valores do dicionário para False
+        if ref_atual != ref_ant:
+            ficha3_ref_filtrado = ficha3[ficha3['ref'] == ref_atual]
+            # Criando o dicionário inicial com todos os valores de 'item.code' como False
+            unique_item_codes = ficha3_ref_filtrado['item.code'].unique()
+            item_status = {code: False for code in unique_item_codes}
+
+        if (primeira_linha) or (ref_atual != ref_ant) or (not item_status[itemcode_atual]):
+            primeira_linha = False
+            ref_ant = ref_atual
+            # Atualiza o status de 'item.code' para True
+            item_status[itemcode_atual] = True
+
+            try:
+                # Obter os valores iniciais de quantidade e de ICMS de 'mydata1050'
+                valor_inicial = mydata1050.loc[
+                    (mydata1050['itemcode'] == row['item.code']) & (mydata1050['ref'] == row['ref']), 'iq'].item()
+                valor_inicial_icms = mydata1050.loc[(mydata1050['itemcode'] == row['item.code']) & \
+                    (mydata1050['ref'] == row['ref']), 'iv'].item()
+                # if criar1050:
+                #     valor_inicial_icms = (valor_inicial * row['confront_value_in_S'] * \
+                #                          (1 + fat)) / row['S_Dev_S']
+                #     # mydata1050.loc[(mydata1050['itemcode'] == row['item.code']) & (mydata1050['ref'] == row['ref']), 'iv'] = valor_inicial_icms
+                #     est_ini.loc[(est_ini['COD_ITEM'] == row['item.code']), 'ICMS_TOT_INI'] = valor_inicial_icms
+                # else:
+            except:
+                print("DEBUG")
+                raise ValueError("Condição impossível: Há códigos de produto não encontrados no registro 1050!")
+
+            # Inicializar o primeiro valor de 'QTD_SALDO'
+            ficha3.at[index, 'QTD_SALDO'] = valor_inicial + row['E_Dev_E'] - row['S_Dev_S']
+            # Cálculo do primeiro valor de 'ICMS_SAIDA_UNI'
+            if (row['S_Dev_S'] > 0):
+                valor_inicial_icms = (valor_inicial * row['confront_value_in_S']\
+                                      * (1 + fat)) / row['S_Dev_S']
+                df_icms_tot_ini.loc[df_icms_tot_ini['COD_ITEM'] == row['item.code'],\
+                    'ICMS_TOT_INI'] = valor_inicial_icms
+                df_icms_tot_ini.loc[df_icms_tot_ini['COD_ITEM'] == row['item.code'], \
+                    'calculado'] = True
+                if valor_inicial == 0:
+                    set_trace()
+                    raise ValueError("Não pode haver saída com estoque zerado!")
+                else:
+                    ficha3.at[index, 'ICMS_SAIDA_UNI'] = valor_inicial_icms / valor_inicial
+                    ficha3.at[index, 'ICMS_SAIDA'] = row['S_Dev_S'] * ficha3.at[index, 'ICMS_SAIDA_UNI']
+                    ficha3.at[index, 'ICMS_TOT_SALDO'] = valor_inicial_icms - ficha3.at[index, 'ICMS_SAIDA']
+                    if (row['legal_code'] == 1 or row['legal_code'] == 2 or row['legal_code'] == 3 or row[
+                        'legal_code'] == 4):
+                        if ficha3.at[index, 'ICMS_SAIDA'] > row['confront_value_in_S']:
+                            ficha3.at[index, 'VLR_RESSARCIMENTO'] = ficha3.at[index, 'ICMS_SAIDA'] - row[
+                                'confront_value_in_S']
+                        else:
+                            if (row['legal_code'] == 1):
+                                ficha3.at[index, 'VLR_COMPLEMENTO'] = row['confront_value_in_S'] - ficha3.at[
+                                    index, 'ICMS_SAIDA']
+            elif (row['S_Dev_S'] < 0):
+                ficha3.at[index, 'ICMS_SAIDA'] = -row['icms_sup']
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = valor_inicial_icms + row['icms_sup']
+                ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index, 'ICMS_TOT_SALDO'] / ficha3.at[index, 'QTD_SALDO']
+                if (row['legal_code'] == 1 or row['legal_code'] == 2 or row['legal_code'] == 3 or row[
+                    'legal_code'] == 4):
+                    if abs(ficha3.at[index, 'ICMS_SAIDA']) > abs(row['confront_value_in_S']):
+                        ficha3.at[index, 'VLR_RESSARCIMENTO'] = ficha3.at[index, 'ICMS_SAIDA'] + row[
+                            'confront_value_in_S']
+                    else:
+                        if (row['legal_code'] == 1):
+                            ficha3.at[index, 'VLR_COMPLEMENTO'] = -row['confront_value_in_S'] - ficha3.at[
+                                index, 'ICMS_SAIDA']
+            elif (row['E_Dev_E'] > 0):
+                ficha3.at[index, 'ICMS_SAIDA'] = 0
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = valor_inicial_icms + row['icms_sup']
+                ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index, 'ICMS_TOT_SALDO'] / ficha3.at[index, 'QTD_SALDO']
+            elif (row['E_Dev_E'] < 0):
+                ficha3.at[index, 'ICMS_SAIDA'] = 0
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = valor_inicial_icms - row['icms_sup']
+                if ficha3.at[index, 'QTD_SALDO'] == 0:
+                    ficha3.at[index, 'ICMS_TOT_SALDO'] = 0
+                    ficha3.at[index, 'ICMS_SAIDA_UNI'] = 0
+                else:
+                    ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index, 'ICMS_TOT_SALDO'] / ficha3.at[
+                        index, 'QTD_SALDO']
+            else:
+                raise ValueError(
+                    "Condição impossível: o arquivo PCAT está com CFOPs que não valem para o ressarcimento!")
+
+
+        # ###########################################################################################
+        # Segunda linha em diante de cada produto ###################################################
+        # ###########################################################################################
+        else:
+
+            ficha3.at[index, 'QTD_SALDO'] = ficha3.at[index - 1, 'QTD_SALDO'] + row['E_Dev_E'] - row['S_Dev_S']
+
+            # Cálculo do primeiro valor de 'ICMS_SAIDA_UNI'
+            if (row['S_Dev_S'] > 0):
+                if not (df_icms_tot_ini.loc[df_icms_tot_ini['COD_ITEM'] == row['item.code'],\
+                        'calculado'].iloc[0]):
+                    valor_inicial_icms = (valor_inicial * row['confront_value_in_S'] \
+                                          * (1 + fat)) / row['S_Dev_S']
+                    df_icms_tot_ini.loc[df_icms_tot_ini['COD_ITEM'] == row['item.code'], \
+                        'ICMS_TOT_INI'] = valor_inicial_icms
+                    df_icms_tot_ini.loc[df_icms_tot_ini['COD_ITEM'] == row['item.code'], \
+                        'calculado'] = True
+                ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index - 1, 'ICMS_SAIDA_UNI']
+                ficha3.at[index, 'ICMS_SAIDA'] = row['S_Dev_S'] * ficha3.at[index, 'ICMS_SAIDA_UNI']
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = ficha3.at[index - 1, 'ICMS_TOT_SALDO'] - ficha3.at[
+                    index, 'ICMS_SAIDA']
+                if (row['legal_code'] == 1 or row['legal_code'] == 2 or row['legal_code'] == 3 or row[
+                    'legal_code'] == 4):
+                    if ficha3.at[index, 'ICMS_SAIDA'] > row['confront_value_in_S']:
+                        ficha3.at[index, 'VLR_RESSARCIMENTO'] = ficha3.at[index, 'ICMS_SAIDA'] - row[
+                            'confront_value_in_S']
+                    else:
+                        if (row['legal_code'] == 1):
+                            ficha3.at[index, 'VLR_COMPLEMENTO'] = row['confront_value_in_S'] - ficha3.at[
+                                index, 'ICMS_SAIDA']
+            elif (row['S_Dev_S'] < 0):
+                ficha3.at[index, 'ICMS_SAIDA'] = -row['icms_sup']
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = ficha3.at[index - 1, 'ICMS_TOT_SALDO'] + row['icms_sup']
+                ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index, 'ICMS_TOT_SALDO'] / ficha3.at[index, 'QTD_SALDO']
+                if (row['legal_code'] == 1 or row['legal_code'] == 2 or row['legal_code'] == 3 or row[
+                    'legal_code'] == 4):
+                    if abs(ficha3.at[index, 'ICMS_SAIDA']) > abs(row['confront_value_in_S']):
+                        ficha3.at[index, 'VLR_RESSARCIMENTO'] = ficha3.at[index, 'ICMS_SAIDA'] + row[
+                            'confront_value_in_S']
+                    else:
+                        if (row['legal_code'] == 1):
+                            ficha3.at[index, 'VLR_COMPLEMENTO'] = -row['confront_value_in_S'] - ficha3.at[
+                                index, 'ICMS_SAIDA']
+            elif (row['E_Dev_E'] > 0):
+                ficha3.at[index, 'ICMS_SAIDA'] = 0
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = ficha3.at[index - 1, 'ICMS_TOT_SALDO'] + row['icms_sup']
+                ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index, 'ICMS_TOT_SALDO'] / ficha3.at[index, 'QTD_SALDO']
+            elif (row['E_Dev_E'] < 0):
+                ficha3.at[index, 'ICMS_SAIDA'] = 0
+                ficha3.at[index, 'ICMS_TOT_SALDO'] = ficha3.at[index - 1, 'ICMS_TOT_SALDO'] - row['icms_sup']
+                if ficha3.at[index, 'QTD_SALDO'] == 0:
+                    ficha3.at[index, 'ICMS_TOT_SALDO'] = 0
+                    ficha3.at[index, 'ICMS_SAIDA_UNI'] = 0
+                else:
+                    ficha3.at[index, 'ICMS_SAIDA_UNI'] = ficha3.at[index, 'ICMS_TOT_SALDO'] / ficha3.at[
+                        index, 'QTD_SALDO']
+            else:
+                print(f"index = {index}")
+                linha = ficha3.iloc[index]
+                print(linha)
+                raise ValueError(
+                    "Condição impossível: o arquivo PCAT está com CFOPs que não valem para o ressarcimento!")
+
+    return ficha3, df_icms_tot_ini
+    #########################################################################################
+    # Gera a Ficha 3 da PCAT ################################################################
+    #########################################################################################
