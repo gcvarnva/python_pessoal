@@ -191,6 +191,34 @@ entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(codigos_sem_repetic
 # ###########################################################################################
 
 # ###########################################################################################
+# ######## Relatório - ICMS Suportado de entrada ############################################
+# ###########################################################################################
+entradas_e_c170_resumidas = \
+    entradas_e_c170[['item_cod_efd_efd', 'descricao_efd', 'cod_unidade_efd',
+                      'Código Produto ou Serviço_nota', 'Valor Produto ou Serviço_nota',
+                      'qtd_efd', 'Valor ICMS Operação_nota',
+                      'Valor ICMS Substituição Tributária_nota',
+                      'Valor Base Cálculo ICMS ST Retido Operação Anterior_nota',
+                      'Data Emissão_nota']]
+teste = pd.merge(entradas_e_c170_resumidas, nfe_sp_aliquotas,
+             left_on='Código Produto ou Serviço_nota', right_on='COD_ITEM', how='left',
+             indicator=True)
+teste['aliq'] = teste['aliq'].fillna(0)
+teste['icms_sup_1'] = (teste['Valor ICMS Operação_nota'] +
+                       teste['Valor ICMS Substituição Tributária_nota'])
+teste['icms_sup_2'] = (teste['Valor Base Cálculo ICMS ST Retido Operação Anterior_nota']
+                       * teste['aliq'] / 100)
+teste['icms_sup'] = np.maximum(teste['icms_sup_1'].fillna(0), teste['icms_sup_2'].fillna(0))
+teste['icms_sup_unit'] = teste['icms_sup'] / teste['qtd_efd']
+teste = teste.sort_values(by=['item_cod_efd_efd', 'cod_unidade_efd', 'icms_sup_unit'],
+                          ascending=[True, True, False])
+caminho_completo = nome_pasta + r'\relatorio_icms_sup_entradas.xlsx'
+teste.to_excel(caminho_completo, index=False)
+# ###########################################################################################
+# ######## Fim - Relatório - ICMS Suportado de entrada ######################################
+# ###########################################################################################
+
+# ###########################################################################################
 # Tabela de CFOPs das entradas ##############################################################
 # ###########################################################################################
 print("gerando CFOPs de entrada da EFD... ", end="", flush=True)
