@@ -40,6 +40,7 @@ ie_tamanhos_por_municipio = {
 MODIFICA = False
 TEM_0220 = True
 UNIFORMIZA_FATORES = False
+SO_GERAR_ENTRADAS = False
 DIVIDIR = False
 CARREGA_BLOCOH = True
 ICMS_TOT_PELAS_SAIDAS = True
@@ -579,3 +580,223 @@ def gerar_ficha3_e_1050(est_ini, criar1050 = True):
     #########################################################################################
     # Gera a Ficha 3 da PCAT ################################################################
     #########################################################################################
+
+def mediana_ponderada_por_grupo(df, group_cols, icms_col="icms_sup", qtd_col="qtd_efd",
+                               out_col="mediana_pond_unit"):
+    # unitário por entrada
+    unit = df[icms_col] / df[qtd_col]
+
+    # base mínima: chaves + unit + peso
+    base = df.loc[:, list(group_cols)].copy()
+    base["_unit_"] = unit.to_numpy()
+    base["_w_"] = df[qtd_col].to_numpy()
+    base["_icms_"] = df[icms_col].to_numpy()  # ← nova linha
+
+    # 🔑 EXCLUI icms_sup == 0 DO CÁLCULO
+    base = base.loc[base["_icms_"] > 0]  # ← novo filtro
+
+    # ordena por grupo + unit
+    base.sort_values(list(group_cols) + ["_unit_"], inplace=True, kind="mergesort")
+
+    # pesos total e acumulado por grupo
+    g = base.groupby(list(group_cols), sort=False)
+    w_total = g["_w_"].transform("sum")
+    w_cum = g["_w_"].cumsum()
+
+    # ponto 50%: pega o primeiro unit onde cum >= total/2
+    half = w_total / 2.0
+    hit = base.loc[w_cum >= half, list(group_cols) + ["_unit_"]]
+    med = hit.groupby(list(group_cols), sort=False)["_unit_"].first()
+
+    # devolve alinhado ao df original (sem merge)
+    keys = pd.MultiIndex.from_frame(df[list(group_cols)])
+    out = pd.Series(keys.map(med), index=df.index, name=out_col)
+    return out.fillna(0.0)
+
+def relatorio_icms_suportado(entradas, nfe_sp_aliquotas, nome_pasta):
+    print("Gerando relatório do ICMS suportado de entrada...", end="", flush=True)
+    # entradas_resumidas = \
+    #     entradas[['COD_ITEM', 'descricao_efd', 'cod_unidade_efd',
+    #               'vlr_prod', 'QTD', 'icms', 'icms_st', 'bc_icms_st_ant',
+    #               'DATA']]
+    # teste = pd.merge(entradas_resumidas, nfe_sp_aliquotas,
+    #                  left_on='Código Produto ou Serviço_nota', right_on='COD_ITEM', how='left',
+    #                  indicator=True)
+    # teste['aliq'] = teste['aliq'].fillna(0)
+    # teste['icms_sup_1'] = (teste['Valor ICMS Operação_nota'] +
+    #                        teste['Valor ICMS Substituição Tributária_nota'])
+    # teste['icms_sup_1'] = (teste['icms_sup_1'] * 100).round().astype('int64') / 100
+    # teste['icms_sup_2'] = (teste['Valor Base Cálculo ICMS ST Retido Operação Anterior_nota']
+    #                        * teste['aliq'] / 100)
+    # teste['icms_sup_2'] = (teste['icms_sup_2'] * 100).round().astype('int64') / 100
+    # teste['icms_sup'] = np.maximum(teste['icms_sup_1'].fillna(0), teste['icms_sup_2'].fillna(0))
+
+
+    teste = entradas[['COD_ITEM', 'descricao_efd', 'cod_unidade_efd', 'QTD',
+                      'ICMS_TOT', 'DATA']].copy()
+    teste['icms_sup_unit'] = teste['ICMS_TOT'] / teste['QTD']
+    teste['icms_sup_unit'] = (teste['icms_sup_unit'] * 100).round().astype('int64') / 100
+    teste = teste.sort_values(by=['COD_ITEM', 'cod_unidade_efd', 'icms_sup_unit'],
+                              ascending=[True, True, False])
+    caminho_completo = nome_pasta + r'\relatorio_icms_sup_entradas.xlsx'
+    g = teste.groupby(['COD_ITEM', 'cod_unidade_efd'])['icms_sup_unit']
+    teste['media_icms_sup'] = g.transform('mean')
+    teste['media_icms_sup'] = (teste['media_icms_sup'] * 100).round().astype('int64') / 100
+    teste['mediana_icms_sup'] = g.transform('median')
+    teste['mediana_icms_sup'] = (teste['mediana_icms_sup'] * 100).round().astype('int64') / 100
+
+    gcols = ["COD_ITEM", "cod_unidade_efd"]
+
+    teste["mediana_pond_icms_sup_unit"] = mediana_ponderada_por_grupo(
+        teste, gcols,
+        icms_col="ICMS_TOT",
+        qtd_col="QTD",
+        out_col="mediana_pond_icms_sup_unit"
+    )
+    teste["mediana_pond_icms_sup_unit"] = (teste["mediana_pond_icms_sup_unit"] * 100).round().astype('int64') / 100
+    # teste.to_excel(caminho_completo, index=False)
+    teste_resumo = teste[['COD_ITEM', 'descricao_efd', 'cod_unidade_efd', 'QTD',
+                          'DATA', 'ICMS_TOT', 'icms_sup_unit', 'media_icms_sup',
+                          'mediana_icms_sup', 'mediana_pond_icms_sup_unit']]
+    teste_resumo.to_excel(caminho_completo, index=False)
+
+    caminho_completo = nome_pasta + r'\fat_conv_entradas.xlsx'
+    teste_p_preencher = teste_resumo.copy()
+    teste_p_preencher = teste_p_preencher.drop_duplicates(subset=['COD_ITEM', 'cod_unidade_efd'])
+    teste_p_preencher['fat_conv'] = 1
+    teste_p_preencher = teste_p_preencher[['COD_ITEM', 'cod_unidade_efd', 'fat_conv']]
+    teste_p_preencher.to_excel(caminho_completo, index=False)
+
+    print("relatório gerado!")
+
+def relatorio_cfops_entrada(entradas_e_c170, nome_pasta):
+    print("gerando CFOPs de entrada da EFD... ", end="", flush=True)
+    cfops_c170 = entradas_e_c170.groupby(['cfop_efd']) \
+        .agg({'qtd_efd': 'sum'}).reset_index().sort_values(by='qtd_efd', ascending=False)
+    cfops_c170['cfop_efd'] = cfops_c170['cfop_efd'].astype(str).str.strip()
+    cfops_c170['Desc_CFOPs'] = cfops_c170['cfop_efd'].map(desc_cfop)
+    caminho_completo = nome_pasta + r'\cfops_entradas.xlsx'
+    cfops_c170.to_excel(caminho_completo, index=False)
+    print("concluído!")
+
+def relatorio_ligacoes_entradas(entradas_e_c170, nome_pasta):
+
+    print("gerando tabela de ligações das entradas... ", end="", flush=True)
+    ligacoes_entradas = entradas_e_c170.groupby(['Código Produto ou Serviço_nota', \
+                                                 'Descrição Produto_nota', \
+                                                 'item_cod_efd_efd', \
+                                                 'descricao_efd']) \
+        .agg({'Valor Produto ou Serviço_nota': 'sum', 'Valor ICMS Operação_nota': 'sum', \
+              'Valor ICMS Substituição Tributária_nota': 'sum', \
+              'Valor Base Cálculo ICMS ST Retido Operação Anterior_nota': 'sum'}).reset_index()
+    caminho_completo = nome_pasta + r'\ligacoes_entradas.xlsx'
+    ligacoes_entradas.to_excel(caminho_completo, index=False)
+    print("concluído!")
+
+def uniformiza_fatores(entradas_e_c170, nome_pasta):
+    entradas_e_c170['razao'] = entradas_e_c170['qtd_efd'].astype(float) \
+                               / entradas_e_c170['Quantidade Comercial_nota'].astype(float)
+
+    print("gerando tabela de conversão de unidades das entradas... ", end="", flush=True)
+    conv_unid_efd = entradas_e_c170[
+        ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', \
+         'item_cod_efd_efd', 'cod_unidade_efd', 'razao']].drop_duplicates()
+    caminho_completo = nome_pasta + r'\conversao_unidades_efd.xlsx'
+    conv_unid_efd.to_excel(caminho_completo, index=False)
+    print("Concluído!")
+
+    mapeamento = entradas_e_c170[
+        ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd', 'razao']]
+    entradas_e_c170 = entradas_e_c170.drop('razao', axis=1)
+    mapeamento_distinto = mapeamento.drop_duplicates()
+    grupo_chave = ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd']
+    # Para cada grupo, pegar a linha com o maior valor de 'razao'
+    resultado = (
+        mapeamento_distinto
+        .sort_values('razao')  # organiza para que o menor venha primeiro
+        .drop_duplicates(subset=grupo_chave, keep='first')  # PEGA O MAIOR VALOR DA RAZÃO
+    )
+
+    entradas_e_c170 = pd.merge(entradas_e_c170, resultado,
+                               on=['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd'],
+                               how='left', indicator='entrada_e_razao')
+
+    if MODIFICA:
+        entradas_e_c170.loc[entradas_e_c170['razao'] < 1, 'razao'] = 1
+        entradas_e_c170['razao'] = np.floor(entradas_e_c170['razao'] * fator_conversao)
+
+    entradas_e_c170['qtd_efd'] = entradas_e_c170['Quantidade Comercial_nota'] * \
+                                 entradas_e_c170['razao']
+
+def converte_efd0220(entradas, nome_pasta):
+
+    entradas['fat_0220'] = 1
+    nome_efd0220 = f"{nome_pasta}/efd0220_completo.xlsx"
+    # Caminho para o arquivo Excel já definido em nome_efd0220
+    # Lendo apenas as colunas desejadas
+    efd0220 = pd.read_excel(
+        nome_efd0220,
+        usecols=['Data Referência (AAAAMM)', 'Código Item', 'Descrição Unidade Conversão', 'Fator Conversão Unidade']
+    )
+
+    # Renomeando as colunas
+    efd0220.rename(columns={
+        'Data Referência (AAAAMM)': 'mes_ref_efd',
+        'Código Item': 'COD_ITEM',
+        'Descrição Unidade Conversão': 'cod_unidade_efd',
+        'Fator Conversão Unidade': 'fat_novo'
+    }, inplace=True)
+
+    # Aplicando strip para evitar espaços em branco
+    efd0220['mes_ref_efd'] = efd0220['mes_ref_efd'].astype(str).str.strip()
+    efd0220['COD_ITEM'] = efd0220['COD_ITEM'].astype(str).str.strip()
+    efd0220['cod_unidade_efd'] = efd0220['cod_unidade_efd'].astype(str).str.strip()
+
+    # Merge temporário para obter o fat_novo correspondente
+    df_merge = entradas.merge(
+        efd0220[['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd', 'fat_novo']],
+        on=['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd'],
+        how='left'
+    )
+    # Atualizar fat_0220 apenas onde houver valor correspondente em fat_novo
+    entradas['fat_0220'] = df_merge['fat_novo'].combine_first(entradas['fat_0220'])
+
+    # entradas.loc[entradas['fat_0220']>=2, 'fat_0220'] = np.trunc(entradas['fat_0220']/2)
+    # entradas.loc[entradas['fat_0220'] >= 4, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 4)
+    # entradas.loc[entradas['fat_0220'] >= 8, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 8)
+    # entradas.loc[entradas['fat_0220'] >= 12, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 12)
+    # entradas.loc[entradas['fat_0220'] >= 16, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 16)
+    # entradas.loc[entradas['fat_0220'] >= 2, 'fat_0220'] = 2
+
+    entradas['QTD'] = entradas['QTD'] * entradas['fat_0220']
+    if DIVIDIR:
+        entradas['QTD'] = entradas['QTD'].apply(dividir_com_preservacao)
+    entradas = entradas.drop(columns=['fat_0220'])
+
+def relatorio_coditens_unids_diversas(entradas, nome_pasta):
+
+    print("Gerando relatório dos códigos de item que têm unidades diferentes nas entradas...", end="", flush=True)
+    # Passo 1: Contar unidades distintas por mes_ref_efd e COD_ITEM
+    unidades_por_item_mes = entradas.groupby(['mes_ref_efd', 'COD_ITEM'])['cod_unidade_efd'].nunique().reset_index(
+        name='qtd_unidades')
+
+    # Passo 2: Filtrar apenas os que têm mais de uma unidade distinta
+    itens_com_varias_unidades = unidades_por_item_mes[unidades_por_item_mes['qtd_unidades'] > 1]
+
+    # Passo 3: Filtrar os dados originais com base nos que têm múltiplas unidades
+    relatorio = entradas.merge(
+        itens_com_varias_unidades[['mes_ref_efd', 'COD_ITEM']],
+        on=['mes_ref_efd', 'COD_ITEM'],
+        how='inner'
+    )
+
+    # Passo 4: Selecionar colunas relevantes e remover duplicatas
+    relatorio = relatorio[['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd']].drop_duplicates()
+
+    # Passo 5: Ordenar para visualização
+    relatorio = relatorio.sort_values(by=['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd'])
+    relatorio = relatorio.rename(columns={'cod_unidade_efd': 'cod_unidade_C170'})
+
+    # Passo 6: Exportar para Excel
+    nome_rel = f"{nome_pasta}/Relatorio-{CNPJ_ENTIDADE}_cod_item_entradas_unidades_diferentes.xlsx"
+    relatorio.to_excel(nome_rel, index=False)
