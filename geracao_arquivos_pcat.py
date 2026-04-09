@@ -1,6 +1,8 @@
 import sys
 from sys import exception
 
+import util_geracao
+
 pasta_bibliotecas = r"Z:\Dados\Projetos_python\bibliotecas"
 sys.path.append(str(pasta_bibliotecas))
 import util_gui
@@ -13,6 +15,11 @@ import matplotlib.pyplot as plt
 from util_geracao import *
 from pathlib import Path
 
+GERAR_RELATORIOS = False
+LE_FATORES = True
+CONVERTE_EFD0220 = False
+
+
 dir_inicial = r"Z:"
 caminho_pasta = util_gui.selecionar_pasta(dir_inicial)
 data_hora_atual = datetime.now().strftime('%d-%m-%Y_%Hh%Mm%Ss')
@@ -21,6 +28,11 @@ os.makedirs(nome_pasta, exist_ok=True)
 set_nome_pasta(nome_pasta)
 
 os.chdir(caminho_pasta)
+
+caminho = Path(caminho_pasta)
+tem_excel_fat_conv = (Path(caminho_pasta) / "fat_conv_entradas.xlsx").exists()
+tem_excel_fat_conv_saidas = (Path(caminho_pasta) / "conversao_unidades_saidas.xlsx").exists()
+
 #Carregando bloco H do contribuinte (início do período)
 blocoh = carrega_blocoh()
 cod_itens_blocoh = blocoh['COD_ITEM'].str.strip().dropna().unique().tolist()
@@ -88,7 +100,7 @@ tab_cnpjs = pd.read_excel(caminho_completo, dtype=str)
 # #####################################################################################################
 # Lendo tabela_1 (notas de entrada e saída) ###########################################################
 # #####################################################################################################
-print("Lendo tabela das notas de entrada e saída...")
+print("Lendo tabela das notas de entrada e saída...", end="", flush=True)
 caminho_completo = caminho_pasta + r"\tabela_1.csv"
 tabela_1 = pd.read_csv(caminho_completo, sep=';', encoding='utf-8', quotechar='"', dtype=str)
 
@@ -111,6 +123,7 @@ tabela_1['IND_OPER'] = np.where((tabela_1['Tipo'] == 'dfe')
                                 | (tabela_1['Tipo'] == 'saida_nfce'), 1, 0)
 tabela_1.columns = [col + '_nota' for col in tabela_1.columns]
 tabela_1 = tabela_1.drop_duplicates(subset=['Chave Acesso NFe_nota', 'Número Item_nota'])
+print("leitura concluída!")
 # #####################################################################################################
 # FIM (Leitura da tabela_1) ###########################################################################
 # #####################################################################################################
@@ -169,6 +182,7 @@ efdE_170sNAsdupl_df = util_ressarcimento.le_efd_c170(fnamelist_2, caminho_pasta,
 # ###########################################################################################
 # Merge do c170 com a Tabela_1 ################################################################
 # ###########################################################################################
+print("Merge do C170 com a tabela 1...", end="", flush=True)
 efdE_170sNAsdupl_df.columns = [col + '_efd' for col in efdE_170sNAsdupl_df.columns]
 efdE_170sNAsdupl_df = efdE_170sNAsdupl_df.rename(\
     columns={'chave_doc_efd_efd': 'chave', 'item_num_efd': 'numero_item'})
@@ -186,49 +200,16 @@ entradas_e_c170 = \
 entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(codigos_sem_repeticoes)]
 # entradas_e_c170 = \
 # entradas_e_c170.loc[entradas_e_c170['item_cod_efd_efd'].isin(cod_itens_blocoh)]
+print("merge concluído!")
 # ###########################################################################################
 # FIM(Merge do c170 com a Tabela_1) #########################################################
 # ###########################################################################################
 
 # ###########################################################################################
-# ######## Relatório - ICMS Suportado de entrada ############################################
-# ###########################################################################################
-entradas_e_c170_resumidas = \
-    entradas_e_c170[['item_cod_efd_efd', 'descricao_efd', 'cod_unidade_efd',
-                      'Código Produto ou Serviço_nota', 'Valor Produto ou Serviço_nota',
-                      'qtd_efd', 'Valor ICMS Operação_nota',
-                      'Valor ICMS Substituição Tributária_nota',
-                      'Valor Base Cálculo ICMS ST Retido Operação Anterior_nota',
-                      'Data Emissão_nota']]
-teste = pd.merge(entradas_e_c170_resumidas, nfe_sp_aliquotas,
-             left_on='Código Produto ou Serviço_nota', right_on='COD_ITEM', how='left',
-             indicator=True)
-teste['aliq'] = teste['aliq'].fillna(0)
-teste['icms_sup_1'] = (teste['Valor ICMS Operação_nota'] +
-                       teste['Valor ICMS Substituição Tributária_nota'])
-teste['icms_sup_2'] = (teste['Valor Base Cálculo ICMS ST Retido Operação Anterior_nota']
-                       * teste['aliq'] / 100)
-teste['icms_sup'] = np.maximum(teste['icms_sup_1'].fillna(0), teste['icms_sup_2'].fillna(0))
-teste['icms_sup_unit'] = teste['icms_sup'] / teste['qtd_efd']
-teste = teste.sort_values(by=['item_cod_efd_efd', 'cod_unidade_efd', 'icms_sup_unit'],
-                          ascending=[True, True, False])
-caminho_completo = nome_pasta + r'\relatorio_icms_sup_entradas.xlsx'
-teste.to_excel(caminho_completo, index=False)
-# ###########################################################################################
-# ######## Fim - Relatório - ICMS Suportado de entrada ######################################
-# ###########################################################################################
-
-# ###########################################################################################
 # Tabela de CFOPs das entradas ##############################################################
 # ###########################################################################################
-print("gerando CFOPs de entrada da EFD... ", end="", flush=True)
-cfops_c170 = entradas_e_c170.groupby(['cfop_efd'])\
-    .agg({'qtd_efd':'sum'}).reset_index().sort_values(by='qtd_efd', ascending=False)
-cfops_c170['cfop_efd'] = cfops_c170['cfop_efd'].astype(str).str.strip()
-cfops_c170['Desc_CFOPs'] = cfops_c170['cfop_efd'].map(desc_cfop)
-caminho_completo = nome_pasta + r'\cfops_entradas.xlsx'
-cfops_c170.to_excel(caminho_completo, index=False)
-print("concluído!")
+if GERAR_RELATORIOS:
+    util_geracao.relatorio_cfops_entrada(entradas_e_c170, nome_pasta)
 # ###########################################################################################
 # FIM (Tabela de CFOPs das entradas) ########################################################
 # ###########################################################################################
@@ -236,58 +217,14 @@ print("concluído!")
 # ###########################################################################################
 # Tabela de ligações das entradas ###########################################################
 # ###########################################################################################
-print("gerando tabela de ligações das entradas... ", end="", flush=True)
-ligacoes_entradas = entradas_e_c170.groupby(['Código Produto ou Serviço_nota',\
-                                             'Descrição Produto_nota',\
-                                             'item_cod_efd_efd',\
-                                             'descricao_efd'])\
-    .agg({'Valor Produto ou Serviço_nota': 'sum', 'Valor ICMS Operação_nota':'sum',\
-          'Valor ICMS Substituição Tributária_nota':'sum',\
-          'Valor Base Cálculo ICMS ST Retido Operação Anterior_nota':'sum'}).reset_index()
-caminho_completo = nome_pasta + r'\ligacoes_entradas.xlsx'
-ligacoes_entradas.to_excel(caminho_completo, index=False)
-print("concluído!")
+if GERAR_RELATORIOS:
+    util_geracao.relatorio_ligacoes_entradas(entradas_e_c170, nome_pasta)
 # ###############################################################################################
 # Uniformizando os fatores de conversão ###########################################################
 # ###############################################################################################
-if UNIFORMIZA_FATORES:
-    entradas_e_c170['razao'] = entradas_e_c170['qtd_efd'].astype(float)\
-    / entradas_e_c170['Quantidade Comercial_nota'].astype(float)
-
-    print("gerando tabela de conversão de unidades das entradas... ", end="", flush=True)
-    conv_unid_efd = entradas_e_c170[
-        ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota',\
-         'item_cod_efd_efd', 'cod_unidade_efd', 'razao']].drop_duplicates()
-    caminho_completo = nome_pasta + r'\conversao_unidades_efd.xlsx'
-    conv_unid_efd.to_excel(caminho_completo, index=False)
-    print("Concluído!")
-
-    mapeamento = entradas_e_c170[['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd', 'razao']]
-    entradas_e_c170 = entradas_e_c170.drop('razao', axis=1)
-    mapeamento_distinto = mapeamento.drop_duplicates()
-    grupo_chave = ['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd']
-    # Para cada grupo, pegar a linha com o maior valor de 'razao'
-    resultado = (
-        mapeamento_distinto
-        .sort_values('razao')  # organiza para que o menor venha primeiro
-        .drop_duplicates(subset=grupo_chave, keep='first')  # PEGA O MAIOR VALOR DA RAZÃO
-    )
-
-    entradas_e_c170 = pd.merge(entradas_e_c170, resultado,
-                     on=['Código Produto ou Serviço_nota', 'Unidade Comercial_nota', 'item_cod_efd_efd'],
-                     how='left', indicator='entrada_e_razao')
-
-    if MODIFICA:
-        entradas_e_c170.loc[entradas_e_c170['razao']<1, 'razao'] = 1
-        entradas_e_c170['razao'] = np.floor(entradas_e_c170['razao'] * fator_conversao)
-
-    entradas_e_c170['qtd_efd'] = entradas_e_c170['Quantidade Comercial_nota'] * \
-    entradas_e_c170['razao']
-# ###############################################################################################
-# FIM (Uniformizando os fatores de conversão) #####################################################
-# ###############################################################################################
-
-
+if not LE_FATORES:
+    if UNIFORMIZA_FATORES:
+        util_geracao.uniformiza_fatores(entradas_e_c170, nome_pasta)
 # ###############################################################################################
 # Manipulando o entradas_e_c170 #################################################################
 # ###############################################################################################
@@ -323,6 +260,7 @@ entradas_e_c170['DATA'] = pd.to_datetime(entradas_e_c170['DATA'],dayfirst=True)
 # ###############################################################################################
 # Gera um DataFrame com todas as notas de entrada (inclusive as de operação própria) ############
 # ###############################################################################################
+print("Finalizando dataframe das notas de entrada (inclusive as de operação própria)...", end="", flush=True)
 # Todas as entradas
 entradas = pd.concat([entradas_e_c170, entradas_oppr], ignore_index=True)
 # Gera a referência para as notas de emissão própria, uma vez que elas não são escrituradas no EFD170
@@ -338,6 +276,7 @@ entradas['cod_unidade_efd'] = entradas['cod_unidade_efd'].astype(str).str.strip(
 
 entradas = entradas.loc[entradas['COD_ITEM'].isin(codigos_sem_repeticoes)]
 #entradas = entradas.loc[entradas['COD_ITEM'].isin(cod_itens_blocoh)]
+print("finalizado!")
 # ###############################################################################################
 # FIM (Gera um DataFrame com todas as notas de entrada (inclusive as de operação própria)) ######
 # ###############################################################################################
@@ -345,52 +284,9 @@ entradas = entradas.loc[entradas['COD_ITEM'].isin(codigos_sem_repeticoes)]
 # ###############################################################################################
 # Lê o EFD0220 ##################################################################################
 # ###############################################################################################
-if TEM_0220:
-    entradas['fat_0220'] = 1
-    nome_efd0220 = f"{caminho_pasta}/efd0220_completo.xlsx"
-    # Caminho para o arquivo Excel já definido em nome_efd0220
-    # Lendo apenas as colunas desejadas
-    efd0220 = pd.read_excel(
-        nome_efd0220,
-        usecols=['Data Referência (AAAAMM)', 'Código Item', 'Descrição Unidade Conversão', 'Fator Conversão Unidade']
-    )
-
-    # Renomeando as colunas
-    efd0220.rename(columns={
-        'Data Referência (AAAAMM)': 'mes_ref_efd',
-        'Código Item': 'COD_ITEM',
-        'Descrição Unidade Conversão': 'cod_unidade_efd',
-        'Fator Conversão Unidade': 'fat_novo'
-    }, inplace=True)
-
-    # Aplicando strip para evitar espaços em branco
-    efd0220['mes_ref_efd'] = efd0220['mes_ref_efd'].astype(str).str.strip()
-    efd0220['COD_ITEM'] = efd0220['COD_ITEM'].astype(str).str.strip()
-    efd0220['cod_unidade_efd'] = efd0220['cod_unidade_efd'].astype(str).str.strip()
-
-    # Merge temporário para obter o fat_novo correspondente
-    df_merge = entradas.merge(
-        efd0220[['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd', 'fat_novo']],
-        on=['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd'],
-        how='left'
-    )
-    # Atualizar fat_0220 apenas onde houver valor correspondente em fat_novo
-    entradas['fat_0220'] = df_merge['fat_novo'].combine_first(entradas['fat_0220'])
-
-    # entradas.loc[entradas['fat_0220']>=2, 'fat_0220'] = np.trunc(entradas['fat_0220']/2)
-    # entradas.loc[entradas['fat_0220'] >= 4, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 4)
-    # entradas.loc[entradas['fat_0220'] >= 8, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 8)
-    # entradas.loc[entradas['fat_0220'] >= 12, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 12)
-    # entradas.loc[entradas['fat_0220'] >= 16, 'fat_0220'] = np.trunc(entradas['fat_0220'] / 16)
-    # entradas.loc[entradas['fat_0220'] >= 2, 'fat_0220'] = 2
-
-    entradas['QTD'] = entradas['QTD'] * entradas['fat_0220']
-    if DIVIDIR:
-        entradas['QTD'] = entradas['QTD'].apply(dividir_com_preservacao)
-    entradas = entradas.drop(columns=['fat_0220'])
-# ###############################################################################################
-# FIM (Lê o EFD0220) ############################################################################
-# ###############################################################################################
+if not LE_FATORES:
+    if CONVERTE_EFD0220:
+        util_geracao.converte_efd0220(entradas, nome_pasta)
 
 # ###############################################################################################
 # ################## Obtendo os dados do registro 0000 ##########################################
@@ -428,50 +324,14 @@ print("Concluído!")
 # FIM (Finalização da geração dos arquivos auxiliares (Registro 0150)) ######################################## #
 # ############################################################################################################# #
 
-# ############################################################################################################# #
-# 'COD_ITEM' (entradas) com unidades distintas ################################################################ #
-# ############################################################################################################# #
-print("Gerando relatório dos códigos de item que têm unidades diferentes nas entradas...")
-# Passo 1: Contar unidades distintas por mes_ref_efd e COD_ITEM
-unidades_por_item_mes = entradas.groupby(['mes_ref_efd', 'COD_ITEM'])['cod_unidade_efd'].nunique().reset_index(name='qtd_unidades')
-
-# Passo 2: Filtrar apenas os que têm mais de uma unidade distinta
-itens_com_varias_unidades = unidades_por_item_mes[unidades_por_item_mes['qtd_unidades'] > 1]
-
-# Passo 3: Filtrar os dados originais com base nos que têm múltiplas unidades
-relatorio = entradas.merge(
-    itens_com_varias_unidades[['mes_ref_efd', 'COD_ITEM']],
-    on=['mes_ref_efd', 'COD_ITEM'],
-    how='inner'
-)
-
-# Passo 4: Selecionar colunas relevantes e remover duplicatas
-relatorio = relatorio[['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd']].drop_duplicates()
-
-# Passo 5: Ordenar para visualização
-relatorio = relatorio.sort_values(by=['mes_ref_efd', 'COD_ITEM', 'cod_unidade_efd'])
-relatorio = relatorio.rename(columns={'cod_unidade_efd': 'cod_unidade_C170'})
-
-# Passo 6: Exportar para Excel
-nome_rel = f"{nome_pasta}/Relatorio-{CNPJ_ENTIDADE}_cod_item_entradas_unidades_diferentes.xlsx"
-relatorio.to_excel(nome_rel, index=False)
-# ############################################################################################################# #
-# FIM ('COD_ITEM' (entradas) com unidades distintas) ########################################################## #
-# ############################################################################################################# #
-
-# ############################################################################################################# #
-# Análise da Razão ############################################################################################ #
-# ############################################################################################################# #
-# IMPLEMENTAR AQUI
-# ############################################################################################################# #
-# FIM (Análise da Razão) ###################################################################################### #
-# ############################################################################################################# #
-
+# 'COD_ITEM' (entradas) com unidades distintas
+if GERAR_RELATORIOS:
+    util_geracao.relatorio_coditens_unids_diversas(entradas, nome_pasta)
 
 # ############################################################################################################# #
 # Montagem das Entradas ####################################################################################### #
 # ############################################################################################################# #
-print("Gerando relatório das alíquotas das entradas...", end="", flush=True)
+print("Finalizando a montagem das entradas...", end="", flush=True)
 entradas = pd.merge(entradas, nfe_sp_aliquotas,
                  on=['COD_ITEM'],
                  how='left', indicator='entrada_e_aliquotas')
@@ -481,9 +341,8 @@ aliquotas_entradas = entradas.drop_duplicates(
 )[['COD_ITEM', 'descricao_efd', 'Código NCM_nota', 'aliq', 'mes_ref_efd']]
 caminho_completo = nome_pasta + r'\ligacoes_aliquotas_entradas.xlsx'
 aliquotas_entradas.to_excel(caminho_completo, index=False)
-print("Concluído!")
 
-print("Finalizando a montagem das entradas...", end="", flush=True)
+
 # Calculando a primeira opção: 'icms' + 'icms_st'
 primeira_opcao = entradas['icms'] + entradas['icms_st']
 segunda_opcao = entradas['bc_icms_st_ant'] * entradas['aliq']/100
@@ -501,11 +360,32 @@ entradas.loc[(entradas['CFOP'].isin(dev_saida)) & (entradas['VL_CONFR']==0),'COD
 
 entradas['SUBTIPO'] = 0
 entradas.loc[entradas['CFOP'].isin(dev_saida),'SUBTIPO'] = 3
-print("Concluído!")
+print("montagem concluída!")
 # ############################################################################################################# #
 # FIM (Montagem das Entradas) ################################################################################# #
 # ############################################################################################################# #
 
+# ###########################################################################################
+# ######## Relatório - ICMS Suportado de entrada ############################################
+# ###########################################################################################
+if LE_FATORES and (not tem_excel_fat_conv):
+    util_geracao.relatorio_icms_suportado(entradas, nfe_sp_aliquotas, nome_pasta)
+    print("Ajuste os fatores de conversão e rode novamente.")
+    print("FIM DA EXECUÇÃO!.")
+    sys.exit(0)
+elif LE_FATORES:
+    caminho_completo = caminho_pasta + r"\fat_conv_entradas.xlsx"
+    df_fat_conv = pd.read_excel(caminho_completo)
+    entradas = pd.merge(entradas, df_fat_conv, on=['COD_ITEM', 'cod_unidade_efd'], how='left',
+                        validate='many_to_one', indicator=True)
+    qtd_diferentes_both = entradas['_merge'].ne('both').sum()
+    if qtd_diferentes_both >0:
+        raise SystemExit("Erro de Merge nos fatores de conversão de entradas!")
+    entradas = entradas.drop(columns='_merge')
+    entradas['QTD'] = entradas['QTD'] * entradas['fat_conv']
+# ###########################################################################################
+# ######## Fim - Relatório - ICMS Suportado de entrada ######################################
+# ###########################################################################################
 
 # ############################################################################################################# #
 # Montagem das Saídas ######################################################################################### #
@@ -545,13 +425,28 @@ saidas['aliq'] = saidas['aliq'].fillna(18)
 saidas['cod_unidade_efd'] = saidas['cod_unidade_efd'].str.strip()
 efd0220['cod_unidade_efd'] = efd0220['cod_unidade_efd'].str.strip()
 
-print("gerando tabela de conversão de unidades das saídas... ", end="", flush=True)
-conv_unid_saidas = saidas[\
-    ['COD_ITEM', 'cod_unidade_efd']].drop_duplicates()
-caminho_completo = nome_pasta + r'\conversao_unidades_saidas.xlsx'
-conv_unid_saidas.to_excel(caminho_completo, index=False)
-print("Concluído!")
-
+if LE_FATORES and (not tem_excel_fat_conv_saidas):
+    print("gerando tabela de conversão de unidades das saídas... ", end="", flush=True)
+    conv_unid_saidas = saidas[\
+        ['COD_ITEM', 'cod_unidade_efd']].drop_duplicates().copy()
+    conv_unid_saidas['fat_conv'] = 1
+    caminho_completo = nome_pasta + r'\conversao_unidades_saidas.xlsx'
+    conv_unid_saidas.to_excel(caminho_completo, index=False)
+    print("Concluído!")
+    print("Ajuste os fatores de conversão de saída e rode novamente.")
+    print("FIM DA EXECUÇÃO!.")
+    sys.exit(0)
+elif LE_FATORES:
+    # PAREI AQUI (08/04/2026)
+    caminho_completo = caminho_pasta + r"\fat_conv_entradas.xlsx"
+    df_fat_conv = pd.read_excel(caminho_completo)
+    entradas = pd.merge(entradas, df_fat_conv, on=['COD_ITEM', 'cod_unidade_efd'], how='left',
+                        validate='many_to_one', indicator=True)
+    qtd_diferentes_both = entradas['_merge'].ne('both').sum()
+    if qtd_diferentes_both > 0:
+        raise SystemExit("Erro de Merge nos fatores de conversão de entradas!")
+    entradas = entradas.drop(columns='_merge')
+    entradas['QTD'] = entradas['QTD'] * entradas['fat_conv']
 
 saidas['fator'] = 1
 saidas = pd.merge(saidas, efd0220[['cod_unidade_efd', 'fat_novo']], on=['cod_unidade_efd'],\
